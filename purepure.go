@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"path/filepath"
@@ -13,7 +14,9 @@ import (
 )
 
 var (
-	scnFileFlag     = flag.String("scnFiles", "", "scn files")
+	scnFileFlag    = flag.String("scnFiles", "", "scn files")
+	engScnFileFlag = flag.String("engScnFiles", "", "scn files")
+
 	outputFolder    = flag.String("outputFolder", "", "output folder")
 	modeFlag        = flag.String("mode", "", "one of: extract, patch")
 	translatedCsv   = flag.String("translatedCsv", "", "path to translated csv")
@@ -36,6 +39,14 @@ func lineStart(i uint32) []byte {
 	return b
 }
 
+func choiceStart() []byte {
+	return []byte{0xf0, 0x1c, 0xf1}
+}
+
+func fileTagStart() []byte {
+	return []byte{0xf0, 0x1a, 0xf1}
+}
+
 func parseJIS(data []byte) string {
 	utf8Bytes, err := jisDecoder.Bytes(data)
 	if err != nil || len(utf8Bytes) < 2 { // Didn't parse as shift-JIS.
@@ -47,7 +58,7 @@ func parseJIS(data []byte) string {
 
 type TLLine struct {
 	Filename       string `csv:"FILENAME"`
-	Index          int    `csv:"INDEX"`
+	Key            string `csv:"KEY"`
 	Length         int    `csv:"LENGTH"`
 	OriginalText   string `csv:"ORIGINAL_TEXT"`
 	TranslatedText string `csv:"TRANSLATED_TEXT"`
@@ -56,8 +67,14 @@ type TLLine struct {
 	LineStatus     string `csv:"LINE_STATUS"`
 }
 
+const (
+	TextLineType    string = "text"
+	ChoiceLineType  string = "choice"
+	FileTagLineType string = "filetag"
+)
+
 type ScnSegment struct {
-	isText    bool
+	lineType  string
 	lineIndex int
 	data      []byte
 }
@@ -66,9 +83,23 @@ func splitFile(data []byte) []*ScnSegment {
 	var out []*ScnSegment
 
 	remaining := data
-	for i := uint32(0); true; i++ {
-		ls := lineStart(i)
+
+	indexMap := make(map[string]int)
+	for {
+		lineType := TextLineType
+		ls := lineStart(uint32(indexMap[lineType]))
 		begin := bytes.Index(remaining, ls)
+		if choiceBegin := bytes.Index(remaining, choiceStart()); choiceBegin != -1 && (begin == -1 || choiceBegin < begin) {
+			ls = choiceStart()
+			begin = choiceBegin
+			lineType = ChoiceLineType
+		}
+		if fileTagBegin := bytes.Index(remaining, fileTagStart()); fileTagBegin != -1 && (begin == -1 || fileTagBegin < begin) {
+			ls = fileTagStart()
+			begin = fileTagBegin
+			lineType = FileTagLineType
+		}
+
 		if begin == -1 {
 			// no more data
 			out = append(out, &ScnSegment{data: remaining})
@@ -80,8 +111,13 @@ func splitFile(data []byte) []*ScnSegment {
 			log.Fatal("did not find end to line")
 		}
 		out = append(out, &ScnSegment{data: remaining[:begin]})
-		out = append(out, &ScnSegment{isText: true, lineIndex: int(i), data: remaining[begin : begin+length]})
+		out = append(out, &ScnSegment{lineType: lineType, lineIndex: indexMap[lineType], data: remaining[begin : begin+length]})
 		remaining = remaining[begin+length:]
+		indexMap[lineType]++
+	}
+
+	if !bytes.Equal(data, combineSegments(out)) {
+		log.Fatal("splitFile messed up :(")
 	}
 	return out
 }
@@ -94,12 +130,37 @@ func combineSegments(segs []*ScnSegment) []byte {
 	return out
 }
 
-func fixFileSizeHeader(data []byte, fileSizeOffset uint32) {
+func fixFileSizeHeader(base string, data []byte, fileSizeOffset uint32, segs []*ScnSegment) {
 	binary.LittleEndian.PutUint32(data, uint32(len(data))-fileSizeOffset)
+	if fileSizeOffset <= 12 {
+		return
+	}
+	numChoices := (fileSizeOffset - 12) / 36
+
+	var pos uint32
+	var choicePos []uint32
+	for _, ss := range segs {
+		if ss.lineType == FileTagLineType {
+			choicePos = append(choicePos, pos)
+		}
+		pos += uint32(len(ss.data))
+	}
+	if uint32(len(choicePos)) != numChoices {
+		log.Printf("WARNING: %v header suggests there should be %v choices, but only found %v in file", base, numChoices, len(choicePos))
+		return
+	}
+
+	for i := uint32(0); i < numChoices; i++ {
+		binary.LittleEndian.PutUint32(data[12+(36*i)+32:], choicePos[i]-fileSizeOffset-uint32(len(fileTagStart())))
+	}
 }
 
 func getFileSizeHeader(data []byte) uint32 {
 	return binary.LittleEndian.Uint32(data)
+}
+
+func mapKey(base, lineType string, lineIndex int) string {
+	return fmt.Sprintf("%v-%v-%v", base, lineType, lineIndex)
 }
 
 func main() {
@@ -107,6 +168,25 @@ func main() {
 
 	switch *modeFlag {
 	case "extract":
+		lineMap := make(map[string]string)
+
+		if *engScnFileFlag != "" {
+			paths, err := filepath.Glob(*engScnFileFlag)
+			Fatal(err)
+			for _, path := range paths {
+				base := filepath.Base(path)
+				data, err := ioutil.ReadFile(path)
+				Fatal(err)
+				split := splitFile(data)
+				for _, ss := range split {
+					if ss.lineType == "" {
+						continue
+					}
+					lineMap[mapKey(base, ss.lineType, ss.lineIndex)] = parseJIS(ss.data)
+				}
+			}
+		}
+
 		paths, err := filepath.Glob(*scnFileFlag)
 		Fatal(err)
 		var tlLines []*TLLine
@@ -115,10 +195,15 @@ func main() {
 			Fatal(err)
 			split := splitFile(data)
 			for _, ss := range split {
-				if !ss.isText {
+				if ss.lineType == "" {
 					continue
 				}
-				tlline := &TLLine{Filename: filepath.Base(path), Index: ss.lineIndex, Length: len(ss.data), OriginalText: parseJIS(ss.data)}
+				base := filepath.Base(path)
+				tlline := &TLLine{Filename: base, Key: mapKey(base, ss.lineType, ss.lineIndex), Length: len(ss.data), OriginalText: parseJIS(ss.data)}
+				tlltext := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]
+				if tlltext != "" && tlltext != tlline.OriginalText {
+					tlline.TranslatedText = tlltext
+				}
 				tlLines = append(tlLines, tlline)
 			}
 
@@ -133,17 +218,14 @@ func main() {
 		Fatal(err)
 		Fatal(gocsv.UnmarshalBytes(data, &tlLines))
 
-		lineMap := make(map[string]map[int][]byte)
+		lineMap := make(map[string][]byte)
 		for _, l := range tlLines {
-			if lineMap[l.Filename] == nil {
-				lineMap[l.Filename] = make(map[int][]byte)
-			}
-			if l.TranslatedText == "" {
+			if l.TranslatedText == "" || l.Key == "" {
 				continue
 			}
 			jis, err := jisEncoder.Bytes([]byte(l.TranslatedText))
 			Fatal(err)
-			lineMap[l.Filename][l.Index] = jis
+			lineMap[l.Key] = jis
 		}
 
 		paths, err := filepath.Glob(*scnFileFlag)
@@ -158,15 +240,15 @@ func main() {
 			log.Println(base, fileSizeOffset)
 			split := splitFile(data)
 			for _, ss := range split {
-				if !ss.isText {
+				if ss.lineType == "" {
 					continue
 				}
-				if eng := lineMap[base][ss.lineIndex]; eng != nil {
+				if eng := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]; eng != nil {
 					ss.data = eng
 				}
 			}
 			outData := combineSegments(split)
-			fixFileSizeHeader(outData, fileSizeOffset)
+			fixFileSizeHeader(base, outData, fileSizeOffset, split)
 			err = ioutil.WriteFile(filepath.Join(*outputScnFolder, base), outData, 0700)
 			Fatal(err)
 		}
