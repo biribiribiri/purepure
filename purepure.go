@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/gocarina/gocsv"
 	"golang.org/x/text/encoding/japanese"
@@ -163,6 +164,14 @@ func mapKey(base, lineType string, lineIndex int) string {
 	return fmt.Sprintf("%v-%v-%v", base, lineType, lineIndex)
 }
 
+func removePPNewLines(s string) string {
+	return strings.Replace(s, "\\N", "\n", -1)
+}
+
+func addPPNewLines(s string) string {
+	return strings.Replace(s, "\n", "\\N", -1)
+}
+
 func main() {
 	flag.Parse()
 
@@ -199,10 +208,16 @@ func main() {
 					continue
 				}
 				base := filepath.Base(path)
-				tlline := &TLLine{Filename: base, Key: mapKey(base, ss.lineType, ss.lineIndex), Length: len(ss.data), OriginalText: parseJIS(ss.data)}
+				tlline := &TLLine{
+					Filename:     base,
+					Key:          mapKey(base, ss.lineType, ss.lineIndex),
+					Length:       len(ss.data),
+					OriginalText: removePPNewLines(parseJIS(ss.data))}
 				tlltext := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]
 				if tlltext != "" && tlltext != tlline.OriginalText {
-					tlline.TranslatedText = tlltext
+					// TrimSpace because earlier translation added padding as space to
+					// maintain line length.
+					tlline.TranslatedText = strings.TrimSpace(removePPNewLines(tlltext))
 				}
 				tlLines = append(tlLines, tlline)
 			}
@@ -223,7 +238,7 @@ func main() {
 			if l.TranslatedText == "" || l.Key == "" {
 				continue
 			}
-			jis, err := jisEncoder.Bytes([]byte(l.TranslatedText))
+			jis, err := jisEncoder.Bytes([]byte(addPPNewLines(l.TranslatedText)))
 			Fatal(err)
 			lineMap[l.Key] = jis
 		}
