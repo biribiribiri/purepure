@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,17 +17,24 @@ import (
 )
 
 var (
-	scnFileFlag    = flag.String("scnFiles", "", "scn files")
-	engScnFileFlag = flag.String("engScnFiles", "", "scn files")
+	scnFileFlag    = flag.String("scnFiles", filepath.Join(ExePath(), "script/*.scn"), "scn files")
+	engScnFileFlag = flag.String("engScnFiles", filepath.Join(ExePath(), "engspt/*.scn"), "scn files")
 
-	outputFolder    = flag.String("outputFolder", "", "output folder")
-	modeFlag        = flag.String("mode", "", "one of: extract, patch")
-	translatedCsv   = flag.String("translatedCsv", "", "path to translated csv")
-	outputScnFolder = flag.String("outputScnFolder", "", "output folder")
+	outputFolder  = flag.String("outputFolder", "", "output folder")
+	modeFlag      = flag.String("mode", "patch", "one of: extract, patch")
+	translatedCsv = flag.String("translatedCsv",
+		"https://docs.google.com/spreadsheets/d/18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk/export?format=csv&id=18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk", "path to translated csv")
+	outputScnFolder = flag.String("outputScnFolder", filepath.Join(ExePath(), "engspt"), "output folder")
 
 	jisDecoder = japanese.ShiftJIS.NewDecoder()
 	jisEncoder = japanese.ShiftJIS.NewEncoder()
 )
+
+func ExePath() string {
+	ex, err := os.Executable()
+	Fatal(err)
+	return filepath.Dir(ex)
+}
 
 // Fatal logs a fatal error if err is not nil.
 func Fatal(err error) {
@@ -71,6 +80,7 @@ func parseJIS(data []byte) string {
 type TLLine struct {
 	Filename       string `csv:"FILENAME"`
 	Key            string `csv:"KEY"`
+	Index          int    `csv:"INDEX"`
 	Length         int    `csv:"LENGTH"`
 	OriginalText   string `csv:"ORIGINAL_TEXT"`
 	TranslatedText string `csv:"TRANSLATED_TEXT"`
@@ -129,7 +139,15 @@ func splitFile(data []byte) []*ScnSegment {
 		out = append(out, &ScnSegment{data: remaining[:begin]})
 		out = append(out, &ScnSegment{lineType: lineType, lineIndex: indexMap[lineType], data: remaining[begin : begin+length]})
 		remaining = remaining[begin+length:]
-		indexMap[lineType]++
+
+		// The FOTS translation added new lines, usually with the same index as the
+		// preceding line. Include these as text lines with the same index as the
+		// original.
+		if !(lineType == TextSegment && bytes.Index(remaining, ls) != -1) {
+			indexMap[lineType]++
+		} else {
+			log.Print("contiuation at ", indexMap[lineType])
+		}
 	}
 
 	if !bytes.Equal(data, combineSegments(out)) {
@@ -184,9 +202,9 @@ func mapKey(base string, st SegmentType, lineIndex int) string {
 }
 
 // removePPNewLines converts Pure Pure new line indicators ("\N") into new
-// lines.
+// lines. The FOTS translation also used "\n".
 func removePPNewLines(s string) string {
-	return strings.Replace(s, "\\N", "\n", -1)
+	return strings.Replace(strings.Replace(s, "\\N", "\n", -1), "\\n", "\n", -1)
 }
 
 // addPPNewLines converts new lines into Pure Pure new line indicators
@@ -210,7 +228,13 @@ func extract() {
 				if ss.lineType == "" {
 					continue
 				}
-				lineMap[mapKey(base, ss.lineType, ss.lineIndex)] = parseJIS(ss.data)
+				v, ok := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]
+				if !ok {
+					lineMap[mapKey(base, ss.lineType, ss.lineIndex)] = parseJIS(ss.data)
+				} else {
+					// Split lines are indicated with ~~~~ on its own line.
+					lineMap[mapKey(base, ss.lineType, ss.lineIndex)] = v + "\n~~~~\n" + parseJIS(ss.data)
+				}
 			}
 		}
 	}
@@ -230,13 +254,14 @@ func extract() {
 			tlline := &TLLine{
 				Filename:     base,
 				Key:          mapKey(base, ss.lineType, ss.lineIndex),
+				Index:        ss.lineIndex,
 				Length:       len(ss.data),
 				OriginalText: removePPNewLines(parseJIS(ss.data))}
-			tlltext := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]
+			// TrimSpace because earlier translation added padding as space to
+			// maintain line length.
+			tlltext := strings.TrimSpace(removePPNewLines(lineMap[mapKey(base, ss.lineType, ss.lineIndex)]))
 			if tlltext != "" && tlltext != tlline.OriginalText {
-				// TrimSpace because earlier translation added padding as space to
-				// maintain line length.
-				tlline.TranslatedText = strings.TrimSpace(removePPNewLines(tlltext))
+				tlline.TranslatedText = tlltext
 			}
 			tlLines = append(tlLines, tlline)
 		}
@@ -248,24 +273,51 @@ func extract() {
 	Fatal(err)
 }
 
-func patch() {
-	var tlLines []*TLLine
-	data, err := ioutil.ReadFile(*translatedCsv)
+func isURL(s string) bool {
+	return strings.HasPrefix(s, "http")
+}
+
+func download(url string) []byte {
+	log.Print("downloading translation from ", url)
+	resp, err := http.Get(url)
 	Fatal(err)
+	defer resp.Body.Close()
+
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(resp.Body)
+	Fatal(err)
+	return buf.Bytes()
+}
+
+func patch() {
+	// log.Println("output scn directory: ", *outputScnFolder)
+	var tlLines []*TLLine
+	var data []byte
+	var err error
+	if !isURL(*translatedCsv) {
+		data, err = ioutil.ReadFile(*translatedCsv)
+		Fatal(err)
+	} else {
+		data = download(*translatedCsv)
+	}
 	Fatal(gocsv.UnmarshalBytes(data, &tlLines))
 
 	lineMap := make(map[string][]byte)
 	for _, l := range tlLines {
+		log.Println("processing TL line: ", l)
 		if l.TranslatedText == "" || l.Key == "" {
 			continue
 		}
 		jis, err := jisEncoder.Bytes([]byte(addPPNewLines(l.TranslatedText)))
 		Fatal(err)
+		// Convert "~~~~" back into split lines.
+		jis = bytes.Replace(jis, []byte("\\N~~~~\\N"), append([]byte{0}, lineStart(uint32(l.Index))...), -1)
 		lineMap[l.Key] = jis
 	}
 
 	paths, err := filepath.Glob(*scnFileFlag)
 	Fatal(err)
+	// log.Println("processing original files: ", paths)
 	for _, path := range paths {
 		data, err := ioutil.ReadFile(path)
 		Fatal(err)
@@ -273,13 +325,14 @@ func patch() {
 		fileSizeOffset := uint32(len(data)) - origFileSizeHeader
 
 		base := filepath.Base(path)
-		log.Println(base, fileSizeOffset)
+		// log.Println(base, fileSizeOffset)
 		split := splitFile(data)
 		for _, ss := range split {
 			if ss.lineType == "" {
 				continue
 			}
 			if eng := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]; eng != nil {
+				// log.Println("inserting translated line ", eng)
 				ss.data = eng
 			}
 		}
