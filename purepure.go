@@ -145,8 +145,6 @@ func splitFile(data []byte) []*ScnSegment {
 		// original.
 		if !(lineType == TextSegment && bytes.Index(remaining, ls) != -1) {
 			indexMap[lineType]++
-		} else {
-			log.Print("contiuation at ", indexMap[lineType])
 		}
 	}
 
@@ -289,6 +287,10 @@ func download(url string) []byte {
 	return buf.Bytes()
 }
 
+func strictSizeMode(base string) bool {
+	return base == "2_6_6.scn"
+}
+
 func patch() {
 	// log.Println("output scn directory: ", *outputScnFolder)
 	var tlLines []*TLLine
@@ -304,7 +306,7 @@ func patch() {
 
 	lineMap := make(map[string][]byte)
 	for _, l := range tlLines {
-		log.Println("processing TL line: ", l)
+		// log.Println("processing TL line: ", l)
 		if l.TranslatedText == "" || l.Key == "" {
 			continue
 		}
@@ -327,11 +329,21 @@ func patch() {
 		base := filepath.Base(path)
 		// log.Println(base, fileSizeOffset)
 		split := splitFile(data)
+		strictSize := strictSizeMode(base)
 		for _, ss := range split {
 			if ss.lineType == "" {
 				continue
 			}
 			if eng := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]; eng != nil {
+				if strictSize {
+					if len(eng) > len(ss.data) {
+						log.Printf("WARNING: Translation line %q (len: %v) is too long for line %v in strict size mode", eng, len(eng), ss)
+						continue
+					}
+					if len(eng) < len(ss.data) {
+						eng = append(eng, bytes.Repeat([]byte{' '}, len(ss.data)-len(eng))...)
+					}
+				}
 				// log.Println("inserting translated line ", eng)
 				ss.data = eng
 			}
