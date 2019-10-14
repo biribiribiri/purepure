@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"flag"
@@ -10,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/gocarina/gocsv"
@@ -25,6 +28,7 @@ var (
 	translatedCsv = flag.String("translatedCsv",
 		"https://docs.google.com/spreadsheets/d/18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk/export?format=csv&id=18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk", "path to translated csv")
 	outputScnFolder = flag.String("outputScnFolder", filepath.Join(ExePath(), "engspt"), "output folder")
+	wordWrapLength  = flag.Int("wordwrap", 50, "word wrap length (in characters)")
 
 	jisDecoder = japanese.ShiftJIS.NewDecoder()
 	jisEncoder = japanese.ShiftJIS.NewEncoder()
@@ -84,6 +88,7 @@ type TLLine struct {
 	Length         int    `csv:"LENGTH"`
 	OriginalText   string `csv:"ORIGINAL_TEXT"`
 	TranslatedText string `csv:"TRANSLATED_TEXT"`
+	EdittedText    string `csv:"EDITTED_TEXT"`
 	Notes          string `csv:"NOTES"`
 	Status         string `csv:"STATUS"`
 	LineStatus     string `csv:"LINE_STATUS"`
@@ -295,6 +300,37 @@ func strictSizeMode(base string) bool {
 	return false
 }
 
+var colorRE = regexp.MustCompile(`\\c[0-9]+`)
+var voiceRE = regexp.MustCompile(`\\V\"[^\"]*\""`)
+
+func lineLength(s string) int {
+	s = colorRE.ReplaceAllString(s, "")
+	s = voiceRE.ReplaceAllString(s, "")
+	return len(s)
+}
+
+func wrap(s string) string {
+	lines := strings.Split(s, "\n")
+	var wrappedLines []string
+	for _, line := range lines {
+		parts := strings.Split(strings.TrimSuffix(line, " "), " ")
+		var curLine []string
+
+		for _, p := range parts {
+			curLine = append(curLine, p)
+			if lineLength(strings.Join(curLine, " ")) > *wordWrapLength {
+				wrappedLines = append(wrappedLines, strings.Join(curLine[:len(curLine)-1], " "))
+				curLine = nil
+				curLine = append(curLine, p)
+			}
+		}
+		if len(curLine) != 0 {
+			wrappedLines = append(wrappedLines, strings.Join(curLine, " "))
+		}
+	}
+	return strings.Join(wrappedLines, "\n")
+}
+
 func patch() {
 	// log.Println("output scn directory: ", *outputScnFolder)
 	var tlLines []*TLLine
@@ -311,10 +347,18 @@ func patch() {
 	lineMap := make(map[string][]byte)
 	for _, l := range tlLines {
 		// log.Println("processing TL line: ", l)
-		if l.TranslatedText == "" || l.Key == "" {
+		if (l.TranslatedText == "" && l.EdittedText == "") || l.Key == "" {
 			continue
 		}
-		jis, err := jisEncoder.Bytes([]byte(addPPNewLines(l.TranslatedText)))
+		tl := l.TranslatedText
+		if l.EdittedText != "" {
+			tl = l.EdittedText
+		}
+		tlWrapped := wrap(tl)
+		// if tl != tlWrapped {
+		// fmt.Printf("%v\n->\n%v\n\n", tl, tlWrapped)
+		// }
+		jis, err := jisEncoder.Bytes([]byte(addPPNewLines(tlWrapped)))
 		Fatal(err)
 		// Convert "~~~~" back into split lines.
 		jis = bytes.Replace(jis, []byte("\\N~~~~\\N"), append([]byte{0}, lineStart(uint32(l.Index))...), -1)
@@ -341,7 +385,7 @@ func patch() {
 			if eng := lineMap[mapKey(base, ss.lineType, ss.lineIndex)]; eng != nil {
 				if strictSize {
 					if len(eng) > len(ss.data) {
-						log.Printf("WARNING: Translation line %q (len: %v) is too long for line %v in strict size mode", eng, len(eng), ss)
+						log.Printf("WARNING: Translation line %q (len: %v) is too long for line %q (len: %v) in strict size mode", eng, len(eng), parseJIS(ss.data), len(ss.data))
 						continue
 					}
 					if len(eng) < len(ss.data) {
@@ -369,5 +413,9 @@ func main() {
 		patch()
 	default:
 		log.Fatalln("invalid mode: ", *modeFlag)
+	}
+	if runtime.GOOS == "windows" {
+		fmt.Println("Press any key to exit...")
+		bufio.NewReader(os.Stdin).ReadRune()
 	}
 }
