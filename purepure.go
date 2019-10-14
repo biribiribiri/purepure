@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -331,6 +332,21 @@ func wrap(s string) string {
 	return strings.Join(wrappedLines, "\n")
 }
 
+var reBubble0 = regexp.MustCompile("f045f2........f2........f2........f2........")
+var reBubble1 = regexp.MustCompile("f046f2........f020")
+var reBubble2 = regexp.MustCompile("f046f207000000")
+
+func removeBubbles(data []byte) []byte {
+	// This code is really bad. Rewrite recommended.
+	hexStr := hex.EncodeToString(data)
+	hexStr = reBubble0.ReplaceAllString(hexStr, "")
+	hexStr = reBubble1.ReplaceAllString(hexStr, "")
+	hexStr = reBubble2.ReplaceAllString(hexStr, "")
+	d, err := hex.DecodeString(hexStr)
+	Fatal(err)
+	return d
+}
+
 func patch() {
 	// log.Println("output scn directory: ", *outputScnFolder)
 	var tlLines []*TLLine
@@ -371,13 +387,16 @@ func patch() {
 	for _, path := range paths {
 		data, err := ioutil.ReadFile(path)
 		Fatal(err)
+		base := filepath.Base(path)
+		strictSize := strictSizeMode(base)
 		origFileSizeHeader := getFileSizeHeader(data)
 		fileSizeOffset := uint32(len(data)) - origFileSizeHeader
+		if !strictSize {
+			data = removeBubbles(data)
+		}
 
-		base := filepath.Base(path)
 		// log.Println(base, fileSizeOffset)
 		split := splitFile(data)
-		strictSize := strictSizeMode(base)
 		for _, ss := range split {
 			if ss.lineType == "" {
 				continue
