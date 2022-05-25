@@ -295,7 +295,7 @@ func download(url string) []byte {
 
 func strictSizeMode(base string) bool {
 	switch base {
-	case "2_6_6.scn", "4_12_1.scn":
+	case "2_6_6.scn", "4_12_1.scn", "4_9_7.scn":
 		return true
 	}
 	return false
