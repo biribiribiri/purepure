@@ -30,6 +30,7 @@ var (
 		"https://docs.google.com/spreadsheets/d/18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk/export?format=csv&id=18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk", "path to translated csv")
 	outputScnFolder = flag.String("outputScnFolder", filepath.Join(ExePath(), "engspt"), "output folder")
 	wordWrapLength  = flag.Int("wordwrap", 50, "word wrap length (in characters)")
+	verbose         = flag.Bool("verbose", false, "verbose logging")
 
 	jisDecoder = japanese.ShiftJIS.NewDecoder()
 	jisEncoder = japanese.ShiftJIS.NewEncoder()
@@ -80,6 +81,13 @@ func parseJIS(data []byte) string {
 	return string(utf8Bytes)
 }
 
+// Log iff verbose flag is true.
+func logV(format string, v ...interface{}) {
+	if *verbose {
+		log.Printf(format, v)
+	}
+}
+
 // TLLine is the CSV format that stores original game text with associated
 // translations.
 type TLLine struct {
@@ -108,6 +116,22 @@ type ScnSegment struct {
 	lineType  SegmentType
 	lineIndex int
 	data      []byte
+}
+
+func dumpSegments(segments []*ScnSegment) string {
+	var out strings.Builder
+
+	offset := 0
+	for _, ss := range segments {
+		if ss.lineType == TextSegment {
+			out.WriteString(fmt.Sprintf("offset: %d (%x)\nlineType: %s\nlineIndex: %d\nshiftjis: %s\n\n", offset, offset, ss.lineType, ss.lineIndex, parseJIS(ss.data)))
+		} else {
+			out.WriteString(fmt.Sprintf("offset: %d (%x)\nlineType: %s\nlineIndex: %d\ndata:\n%s\n", offset, offset, ss.lineType, ss.lineIndex, hex.Dump(ss.data)))
+		}
+		offset += len(ss.data)
+	}
+
+	return out.String()
 }
 
 // splitFile parses an SCN file into a slice of ScnSegments.
@@ -397,6 +421,7 @@ func patch() {
 
 		// log.Println(base, fileSizeOffset)
 		split := splitFile(data)
+		logV("%s segments:\n %v", base, dumpSegments(split))
 		for _, ss := range split {
 			if ss.lineType == "" {
 				continue
