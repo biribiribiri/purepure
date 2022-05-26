@@ -358,19 +358,34 @@ func wrap(s string) string {
 	return strings.Join(wrappedLines, "\n")
 }
 
-var reBubble0 = regexp.MustCompile("f045f2........f2........f2........f2........")
-var reBubble1 = regexp.MustCompile("f046f2........f020")
-var reBubble2 = regexp.MustCompile("f046f207000000")
+func hexEncode(data []byte) string {
+	var out strings.Builder
+	hexStr := hex.EncodeToString(data)
+
+	for i := 0; i < len(hexStr)/2; i++ {
+		out.WriteByte(hexStr[2*i])
+		out.WriteByte(hexStr[(2*i)+1])
+		out.WriteRune(' ')
+	}
+	return out.String()
+}
+
+func hexDecode(data string) []byte {
+	out, err := hex.DecodeString(strings.ReplaceAll(data, " ", ""))
+	Fatal(err)
+	return out
+}
+
+var reBubble0 = regexp.MustCompile("f0 45 f2 .. .. .. .. f2 .. .. .. .. f2 .. .. .. .. f2 .. .. .. ..")
+var reBubble1 = regexp.MustCompile("f0 46 f2 .. .. .. .. f0 20")
+var reBubble2 = regexp.MustCompile("f0 46 f2 07 00 00 00")
 
 func removeBubbles(data []byte) []byte {
-	// This code is really bad. Rewrite recommended.
-	hexStr := hex.EncodeToString(data)
+	hexStr := hexEncode(data)
 	hexStr = reBubble0.ReplaceAllString(hexStr, "")
 	hexStr = reBubble1.ReplaceAllString(hexStr, "")
 	hexStr = reBubble2.ReplaceAllString(hexStr, "")
-	d, err := hex.DecodeString(hexStr)
-	Fatal(err)
-	return d
+	return hexDecode(hexStr)
 }
 
 func patch() {
