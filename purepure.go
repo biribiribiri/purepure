@@ -21,12 +21,14 @@ import (
 )
 
 var (
-	scnFileFlag    = flag.String("scnFiles", filepath.Join(ExePath(), "script/*.scn"), "scn files")
-	engScnFileFlag = flag.String("engScnFiles", filepath.Join(ExePath(), "engspt/*.scn"), "scn files")
+	scnFileFlag       = flag.String("scnFiles", filepath.Join(ExePath(), "script/*.scn"), "scn files")
+	engScnFileFlag    = flag.String("engScnFiles", filepath.Join(ExePath(), "engspt/*.scn"), "scn files")
+	referenceScnFiles = flag.String("referenceScnFiles", filepath.Join(ExePath(), "reference/*.scn"), "reference folder (for testing only)")
 
-	outputFolder  = flag.String("outputFolder", "", "output folder")
-	modeFlag      = flag.String("mode", "patch", "one of: extract, patch")
-	translatedCsv = flag.String("translatedCsv",
+	referenceCheck = flag.Bool("referenceCheck", false, "check the output against the reference files")
+	outputFolder   = flag.String("outputFolder", "", "output folder")
+	modeFlag       = flag.String("mode", "patch", "one of: extract, patch")
+	translatedCsv  = flag.String("translatedCsv",
 		"https://docs.google.com/spreadsheets/d/18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk/export?format=csv&id=18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk", "path to translated csv")
 	outputScnFolder = flag.String("outputScnFolder", filepath.Join(ExePath(), "engspt"), "output folder")
 	wordWrapLength  = flag.Int("wordwrap", 50, "word wrap length (in characters)")
@@ -405,6 +407,15 @@ func patch() {
 		lineMap[l.Key] = jis
 	}
 
+	baseToReferencePath := make(map[string]string)
+	if *referenceCheck {
+		referencePaths, err := filepath.Glob(*referenceScnFiles)
+		Fatal(err)
+		for _, path := range referencePaths {
+			baseToReferencePath[filepath.Base(path)] = path
+		}
+	}
+
 	paths, err := filepath.Glob(*scnFileFlag)
 	Fatal(err)
 	// log.Println("processing original files: ", paths)
@@ -444,6 +455,16 @@ func patch() {
 		fixFileSizeHeader(base, outData, fileSizeOffset, split)
 		err = ioutil.WriteFile(filepath.Join(*outputScnFolder, base), outData, 0700)
 		Fatal(err)
+
+		if *referenceCheck {
+			referencePath := baseToReferencePath[base]
+			refData, err := ioutil.ReadFile(referencePath)
+			Fatal(err)
+			compare := bytes.Compare(refData, outData)
+			if compare != 0 {
+				log.Fatalf("mismatch during reference check of %s: %s", base, referencePath)
+			}
+		}
 	}
 }
 
