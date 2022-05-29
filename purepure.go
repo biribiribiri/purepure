@@ -321,7 +321,7 @@ func download(url string) []byte {
 
 func strictSizeMode(base string) bool {
 	switch base {
-	case "2_6_6.scn", "4_12_1.scn", "4_10_2.scn", "4_13_9.scn", "5_10_1.scn":
+	case "2_6_6.scn", "4_12_1.scn":
 		return true
 	}
 	return false
@@ -390,36 +390,29 @@ func removeBubbles(data []byte) []byte {
 	return hexDecode(hexStr)
 }
 
-var reRouteChange0 = regexp.MustCompile("f0 14 f1 68 6c 00 f2 02 00 00 00 f1 5f 74 6d 30 00 f0 15 f1 5f 74 6d 30 00 f2 .. .. .. ..")
-var reRouteChange1 = regexp.MustCompile("f1 00 f0 16 f2 .. .. .. .. f0 1a f1")
+var reRouteChange = regexp.MustCompile("f2 .. .. .. .. f0 1a f1")
 
 func fixRouteChange(file string, data []byte, fileSizeDiff int) []byte {
-	if file != "4_9_7.scn" {
+	switch file {
+	case "4_9_7.scn":
+	case "4_10_2.scn":
+	case "4_13_9.scn":
+	case "5_10_1.scn":
+		break
+	default:
 		return data
 	}
 	hexStr := hexEncode(data)
 
-	hexStr = reRouteChange0.ReplaceAllStringFunc(hexStr, func(s string) string {
-		offsetStr := s[len(s)-11:]
+	hexStr = reRouteChange.ReplaceAllStringFunc(hexStr, func(s string) string {
+		offsetStr := s[3 : 3+11]
 		offset := getFileSizeHeader(hexDecode(offsetStr))
 		offset = uint32(int(offset) + fileSizeDiff)
 		offsetBytes := make([]byte, 4)
 		binary.LittleEndian.PutUint32(offsetBytes, offset)
 		newOffsetStr := hexEncode(offsetBytes)
-		out := s[:len(s)-11] + newOffsetStr
-		logV("%s: updating route change type 0 offset from %q to %q\n%q\n%q", file, offsetStr, newOffsetStr, s, out)
-		return out
-	})
-
-	hexStr = reRouteChange1.ReplaceAllStringFunc(hexStr, func(s string) string {
-		offsetStr := s[len(s)-20 : len(s)-9]
-		offset := getFileSizeHeader(hexDecode(offsetStr))
-		offset = uint32(int(offset) + fileSizeDiff)
-		offsetBytes := make([]byte, 4)
-		binary.LittleEndian.PutUint32(offsetBytes, offset)
-		newOffsetStr := hexEncode(offsetBytes)
-		out := s[:len(s)-20] + newOffsetStr + " f0 1a f1"
-		logV("%s: updating route change type 1 offset from %q to %q\n%q\n%q", file, offsetStr, newOffsetStr, s, out)
+		out := "f2 " + newOffsetStr + " f0 1a f1"
+		logV("%s: updating route change offset from %q to %q\n%q\n%q", file, offsetStr, newOffsetStr, s, out)
 		return out
 	})
 
@@ -477,7 +470,7 @@ func patch() {
 		origDataSize := len(data)
 		Fatal(err)
 		base := filepath.Base(path)
-		logV("%s segments:\n %v", base, dumpSegments(splitFile(data)))
+		// logV("%s segments:\n %v", base, dumpSegments(splitFile(data)))
 		strictSize := strictSizeMode(base)
 		origFileSizeHeader := getFileSizeHeader(data)
 		fileSizeOffset := uint32(len(data)) - origFileSizeHeader
