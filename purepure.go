@@ -442,6 +442,10 @@ func patch() {
 		if l.EdittedText != "" {
 			tl = l.EdittedText
 		}
+		// Replace name brackets.
+		tl = strings.ReplaceAll(tl, "【", "「")
+		tl = strings.ReplaceAll(tl, "】", "」")
+
 		tlWrapped := wrap(tl)
 		// if tl != tlWrapped {
 		// fmt.Printf("%v\n->\n%v\n\n", tl, tlWrapped)
