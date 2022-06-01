@@ -419,6 +419,28 @@ func fixRouteChange(file string, data []byte, fileSizeDiff int) []byte {
 	return hexDecode(hexStr)
 }
 
+func fotsPatches(file string, data []byte) []byte {
+	switch file {
+	case "1_6_2.scn":
+		// Patch for 1_6_2 (present from sachi scene).
+		// Adds the "try your best" CG and keeps music playing at the end of the scene.
+		hexStr := hexEncode(data)
+		hexStr = strings.ReplaceAll(hexStr, "f3 19 00 00", "f0 23 f2 07 00 00 00 f2 80 00 00 00 f2 2c 01 00 00 f2 00 00 00 00 f0 20 f3 19 00 00")
+		hexStr = strings.ReplaceAll(hexStr, "f0 2d f2 b8 0b 00 00 f3 1d", "f0 19 f1 50 50 4e 31 4e 00 f2 00 00 00 00 f2 80 00 00 00 f2 a0 0f 00 00 f2 01 00 00 00 f0 20 f3 1d")
+		hexStr = strings.ReplaceAll(hexStr, "f3 22 00 00 00", "f0 19 f1 50 50 4e 32 4e 00 f2 00 00 00 00 f2 80 00 00 00 f2 a0 0f 00 00 f2 01 00 00 00 f0 20 f3 22 00 00 00")
+		hexStr = strings.ReplaceAll(hexStr, "f0 23 f2 07 00 00 00 f2 80 00 00 00 f2 2c 01 00 00 f2 00 00 00 00 f0 20 f3 26 00 00 00", "f3 26 00 00 00")
+		return hexDecode(hexStr)
+	case "1_5_22.scn":
+		// Change BGM01 to BGM19.
+		hexStr := hexEncode(data)
+		hexStr = strings.ReplaceAll(hexStr, "42 47 4d 30 31", "42 47 4d 31 39")
+		return hexDecode(hexStr)
+	default:
+		return data
+	}
+
+}
+
 func patch() {
 	// log.Println("output scn directory: ", *outputScnFolder)
 	var tlLines []*TLLine
@@ -503,6 +525,7 @@ func patch() {
 			}
 		}
 		outData := combineSegments(split)
+		outData = fotsPatches(base, outData)
 		fixFileSizeHeader(base, outData, fileSizeOffset, split)
 		outData = fixRouteChange(base, outData, len(outData)-origDataSize)
 		logV("%s segments:\n %v", base, dumpSegments(splitFile(outData)))
