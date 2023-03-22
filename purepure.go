@@ -29,7 +29,7 @@ var (
 	outputFolder   = flag.String("outputFolder", "", "output folder")
 	modeFlag       = flag.String("mode", "patch", "one of: extract, patch")
 	translatedCsv  = flag.String("translatedCsv",
-		"https://docs.google.com/spreadsheets/d/18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk/export?format=csv&id=18B8FM6nzPWh_2iXfywr4qtN9121ANN5yVg8Xb8qXRfk", "path to translated csv")
+		"https://docs.google.com/spreadsheets/d/13U9Yqr98QzYlLjsiJpKAzUPWJY9zGpPKg24KZqzgjPU/export?format=csv&id=13U9Yqr98QzYlLjsiJpKAzUPWJY9zGpPKg24KZqzgjPU", "path to translated csv")
 	outputScnFolder = flag.String("outputScnFolder", filepath.Join(ExePath(), "engspt"), "output folder")
 	wordWrapLength  = flag.Int("wordwrap", 50, "word wrap length (in characters)")
 	verbose         = flag.Bool("verbose", false, "verbose logging")
@@ -97,12 +97,8 @@ type TLLine struct {
 	Key            string `csv:"KEY"`
 	Index          int    `csv:"INDEX"`
 	Length         int    `csv:"LENGTH"`
-	OriginalText   string `csv:"ORIGINAL_TEXT"`
 	TranslatedText string `csv:"TRANSLATED_TEXT"`
 	EdittedText    string `csv:"EDITTED_TEXT"`
-	Notes          string `csv:"NOTES"`
-	Status         string `csv:"STATUS"`
-	LineStatus     string `csv:"LINE_STATUS"`
 }
 
 type SegmentType string
@@ -282,15 +278,14 @@ func extract() {
 			}
 			base := filepath.Base(path)
 			tlline := &TLLine{
-				Filename:     base,
-				Key:          mapKey(base, ss.lineType, ss.lineIndex),
-				Index:        ss.lineIndex,
-				Length:       len(ss.data),
-				OriginalText: removePPNewLines(parseJIS(ss.data))}
+				Filename: base,
+				Key:      mapKey(base, ss.lineType, ss.lineIndex),
+				Index:    ss.lineIndex,
+				Length:   len(ss.data)}
 			// TrimSpace because earlier translation added padding as space to
 			// maintain line length.
 			tlltext := strings.TrimSpace(removePPNewLines(lineMap[mapKey(base, ss.lineType, ss.lineIndex)]))
-			if tlltext != "" && tlltext != tlline.OriginalText {
+			if tlltext != "" {
 				tlline.TranslatedText = tlltext
 			}
 			tlLines = append(tlLines, tlline)
